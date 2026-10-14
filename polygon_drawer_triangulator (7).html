@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Polygon Drawer & Triangulator</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap');
+        
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #0f172a;
+            font-family: 'Inter', sans-serif;
+            user-select: none;
+        }
+
+        canvas {
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 1;
+        }
+
+        .ui-layer {
+            position: absolute;
+            z-index: 10;
+            pointer-events: none;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+        }
+
+        .interactive {
+            pointer-events: auto;
+        }
+
+        /* High z-index floating tooltip for vertex angles */
+        #angle-tooltip {
+            position: absolute;
+            z-index: 9999;
+            pointer-events: none;
+            display: none;
+            transform: translate(-50%, -120%);
+            transition: opacity 0.15s ease, transform 0.15s ease;
+        }
+
+        /* Custom scrollbars for the math panel */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.4);
+            border-radius: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(148, 163, 184, 0.3);
+            border-radius: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(148, 163, 184, 0.5);
+        }
+
+        /* Subtle grid background for geometry aesthetic */
+        .grid-bg {
+            background-image: 
+                radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.07) 1px, transparent 0);
+            background-size: 24px 24px;
+        }
+    </style>
+</head>
+<body class="grid-bg">
+
+    <!-- Interactive HTML Canvas -->
+    <canvas id="canvas"></canvas>
+
+    <!-- UI Overlay Layer -->
+    <div class="ui-layer flex flex-col justify-between p-4 md:p-6">
+
+        <!-- Top Header & Instructions -->
+        <div class="flex justify-between items-start w-full max-w-6xl mx-auto">
+            <div class="bg-slate-900/90 backdrop-blur-md shadow-2xl rounded-2xl p-4 md:p-5 interactive text-slate-100 border border-slate-800/80 max-w-md transition-all">
+                <div class="flex items-center space-x-3 mb-2">
+                    <div class="w-3 h-3 rounded-full bg-indigo-500 animate-pulse"></div>
+                    <h1 class="font-bold text-lg md:text-xl tracking-tight text-white">Polygon Drawer & Triangulator</h1>
+                </div>
+                <p id="instruction" class="text-xs md:text-sm text-slate-300 leading-relaxed">
+                    Hold <kbd class="px-2 py-1 bg-slate-800 border border-slate-700 rounded-md text-indigo-300 font-mono text-xs shadow-inner">SPACEBAR</kbd> and drag your mouse to freehand draw a closed loop.
+                </p>
+
+                <!-- Dynamic Polygon Side Counter Info Box -->
+                <div id="info-box" class="hidden mt-3 p-3 bg-indigo-950/60 text-indigo-200 rounded-xl text-xs md:text-sm font-medium border border-indigo-800/50 flex items-center justify-between">
+                    <span>Constructed Polygon:</span>
+                    <span class="font-bold font-mono text-indigo-300 bg-indigo-900/80 px-2.5 py-0.5 rounded-lg text-sm border border-indigo-700/50">
+                        <span id="side-count">0</span> Sides (<span id="vert-count">0</span> Vertices)
+                    </span>
+                </div>
+            </div>
+
+            <!-- Spacebar Active Drawing Status Badge / Intersect Alert Badge -->
+            <div id="drawing-indicator" class="hidden bg-emerald-500/20 backdrop-blur-md text-emerald-300 border border-emerald-500/40 px-4 py-2 rounded-full font-medium text-xs md:text-sm flex items-center space-x-2 shadow-lg transition-all duration-200">
+                <span id="indicator-dot" class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping"></span>
+                <span id="indicator-text">Drawing Path... Release spacebar or reach start point to close</span>
+            </div>
+        </div>
+
+        <!-- Floating Bottom Toolbar -->
+        <div class="flex justify-center w-full my-2">
+            <div id="controls" class="hidden flex flex-wrap gap-3 interactive bg-slate-900/90 backdrop-blur-md p-2.5 rounded-2xl border border-slate-800/80 shadow-2xl transition-all">
+                <button id="btn-triangulate" class="bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-semibold py-2.5 px-5 rounded-xl shadow-lg transition-all text-xs md:text-sm flex items-center space-x-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"></path></svg>
+                    <span id="btn-triangulate-text">Cut into Triangles</span>
+                </button>
+
+                <button id="btn-sum-angles" class="bg-teal-600 hover:bg-teal-500 active:scale-95 text-white font-semibold py-2.5 px-5 rounded-xl shadow-lg transition-all text-xs md:text-sm flex items-center space-x-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M12 7h.01"></path></svg>
+                    <span>Sum Angles</span>
+                </button>
+
+                <button id="btn-clear" class="bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 font-semibold py-2.5 px-5 rounded-xl transition-all text-xs md:text-sm border border-slate-700 flex items-center space-x-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                    <span>Clear Canvas</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Angle Sum Calculation Panel (Right Sidebar) -->
+    <div id="math-panel" class="hidden fixed z-30 right-4 top-20 md:right-6 md:top-24 bg-slate-900/95 backdrop-blur-xl shadow-2xl rounded-2xl p-5 text-slate-100 border border-slate-800 w-80 md:w-96 max-h-[75vh] flex flex-col interactive transition-all duration-300 ease-out">
+        <div class="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
+            <h2 class="font-bold text-base md:text-lg text-white flex items-center space-x-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-teal-400"></span>
+                <span>Angle Sum Calculation</span>
+            </h2>
+            <button id="btn-close-math" class="text-slate-400 hover:text-slate-200 p-1 rounded-lg hover:bg-slate-800 transition">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+            </button>
+        </div>
+
+        <!-- Addition Algorithm List -->
+        <div class="overflow-y-auto custom-scrollbar flex-1 pr-1 mb-3 space-y-2">
+            <p class="text-xs text-slate-400 mb-1">Internal integer angles sum (hover to highlight vertex):</p>
+            <div id="addition-algo" class="font-mono text-xs md:text-sm bg-slate-950/80 p-3 rounded-xl border border-slate-800/80 leading-relaxed text-slate-300">
+                <!-- Dynamically populated -->
+            </div>
+        </div>
+
+        <!-- Theoretical Formula Breakdown Section -->
+        <div class="bg-indigo-950/80 border border-indigo-800/60 rounded-xl p-3.5 text-center space-y-2 shadow-inner">
+            <div class="text-xs text-indigo-300 font-medium">Triangle Count Calculation:</div>
+            <div id="formula-breakdown" class="font-mono font-bold text-sm text-indigo-200">
+                (N - 2) &times; 180&deg;
+            </div>
+            <div id="total-sum-badge" class="text-base md:text-lg font-bold text-teal-300 bg-teal-950/60 py-1.5 px-3 rounded-lg border border-teal-800/50">
+                Total = 0&deg;
+            </div>
+        </div>
+    </div>
+
+    <!-- High Z-Index Angle Hover Tooltip -->
+    <div id="angle-tooltip" class="bg-slate-950/95 text-indigo-300 font-mono font-bold text-xs md:text-sm px-3 py-1.5 rounded-lg border border-indigo-500/50 shadow-2xl flex items-center space-x-1.5">
+        <span class="w-2 h-2 rounded-full bg-indigo-400"></span>
+        <span id="tooltip-text">0&deg;</span>
+    </div>
+
+    <!-- JavaScript Application Logic -->
+    <script>
+        // Canvas & Context Setup
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        // DOM Elements
+        const instruction = document.getElementById('instruction');
+        const infoBox = document.getElementById('info-box');
+        const sideCountSpan = document.getElementById('side-count');
+        const vertCountSpan = document.getElementById('vert-count');
+        
+        const drawingIndicator = document.getElementById('drawing-indicator');
+        const indicatorDot = document.getElementById('indicator-dot');
+        const indicatorText = document.getElementById('indicator-text');
+        
+        const controls = document.getElementById('controls');
+        
+        const btnTriangulate = document.getElementById('btn-triangulate');
+        const btnTriangulateText = document.getElementById('btn-triangulate-text');
+        const btnSumAngles = document.getElementById('btn-sum-angles');
+        const btnClear = document.getElementById('btn-clear');
+        
+        const mathPanel = document.getElementById('math-panel');
+        const btnCloseMath = document.getElementById('btn-close-math');
+        const additionAlgo = document.getElementById('addition-algo');
+        const formulaBreakdown = document.getElementById('formula-breakdown');
+        const totalSumBadge = document.getElementById('total-sum-badge');
+        
+        const tooltip = document.getElementById('angle-tooltip');
+        const tooltipText = document.getElementById('tooltip-text');
+
+        // High DPI Canvas Scaling
+        let width = 0, height = 0, dpr = 1;
+
+        function resizeCanvas() {
+            dpr = window.devicePixelRatio || 1;
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width * dpr;
+            canvas.height = height * dpr;
+            ctx.scale(dpr, dpr);
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // Application State
+        let isSpaceDown = false;
+        let isDrawing = false;
+        let hasClosed = false;
+
+        let rawPoints = [];
+        let polygon = [];          // Simplified polygon vertices {x, y}
+        let polygonAngles = [];    // Integer display angles (exactly sum to (N-2)*180)
+        let rawAngles = [];        // Precise float angles
+        
+        let triangles = [];        // Triangulated output triangles
+        let isTriangulated = false;
+
+        let mousePos = { x: 0, y: 0 };
+        let hoveredVertexIndex = -1;
+        let activeHighlightIndex = -1;
+        let intersectAlertTimeout = null;
+
+        // Constants
+        const CLOSE_DISTANCE = 35;       // Distance to start point for auto-close (px)
+        const MIN_RAW_POINTS = 15;       // Minimum raw points before auto-closing
+        const RDP_TOLERANCE = 22;        // Ramer-Douglas-Peucker simplification tolerance
+        const HOVER_DISTANCE = 18;       // Radius to detect vertex hover
+
+        // Segment intersection helper: Checks if segment AB intersects CD
+        function doSegmentsIntersect(a, b, c, d) {
+            function ccw(p1, p2, p3) {
+                return (p3.y - p1.y) * (p2.x - p1.x) > (p2.y - p1.y) * (p3.x - p1.x);
+            }
+            return (ccw(a, c, d) !== ccw(b, c, d)) && (ccw(a, b, c) !== ccw(a, b, d));
+        }
+
+        // Check if a new point causes the current path to cross itself
+        function checkSelfIntersection(points) {
+            const n = points.length;
+            if (n < 4) return false;
+
+            const p3 = points[n - 2];
+            const p4 = points[n - 1];
+
+            // Check against all segments except adjacent ones
+            for (let i = 0; i < n - 3; i++) {
+                const p1 = points[i];
+                const p2 = points[i + 1];
+                if (doSegmentsIntersect(p1, p2, p3, p4)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Trigger Self-Intersection Alert & Reset
+        function triggerIntersectionReset() {
+            resetDrawingState();
+            rawPoints = [];
+
+            // Update status badge to show self-intersection warning
+            drawingIndicator.classList.remove('hidden');
+            drawingIndicator.className = "bg-rose-500/20 backdrop-blur-md text-rose-300 border border-rose-500/40 px-4 py-2 rounded-full font-medium text-xs md:text-sm flex items-center space-x-2 shadow-lg animate-bounce";
+            indicatorDot.className = "w-2.5 h-2.5 rounded-full bg-rose-400 animate-ping";
+            indicatorText.innerText = "Shape crossed over itself! Drawing reset.";
+
+            if (intersectAlertTimeout) clearTimeout(intersectAlertTimeout);
+            intersectAlertTimeout = setTimeout(() => {
+                drawingIndicator.classList.add('hidden');
+                drawingIndicator.className = "hidden bg-emerald-500/20 backdrop-blur-md text-emerald-300 border border-emerald-500/40 px-4 py-2 rounded-full font-medium text-xs md:text-sm flex items-center space-x-2 shadow-lg";
+                indicatorDot.className = "w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping";
+                indicatorText.innerText = "Drawing Path... Release spacebar or reach start point to close";
+            }, 2500);
+        }
+
+        // Key Listeners for Spacebar Drawing
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                e.preventDefault();
+                if (!isSpaceDown && !hasClosed) {
+                    isSpaceDown = true;
+                    isDrawing = true;
+                    rawPoints = [{ x: mousePos.x, y: mousePos.y }];
+                    
+                    drawingIndicator.className = "bg-emerald-500/20 backdrop-blur-md text-emerald-300 border border-emerald-500/40 px-4 py-2 rounded-full font-medium text-xs md:text-sm flex items-center space-x-2 shadow-lg";
+                    indicatorDot.className = "w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping";
+                    indicatorText.innerText = "Drawing Path... Release spacebar or reach start point to close";
+                    drawingIndicator.classList.remove('hidden');
+                }
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (e.code === 'Space') {
+                if (isSpaceDown) {
+                    isSpaceDown = false;
+                    if (isDrawing && !hasClosed) {
+                        if (rawPoints.length > MIN_RAW_POINTS) {
+                            finishPolygon();
+                        } else {
+                            resetDrawingState();
+                        }
+                    }
+                }
+            }
+        });
+
+        // Mouse & Touch Movement Tracking
+        function handleMove(x, y) {
+            mousePos.x = x;
+            mousePos.y = y;
+
+            if (isDrawing && isSpaceDown && !hasClosed) {
+                const lastPt = rawPoints[rawPoints.length - 1];
+                if (!lastPt || Math.hypot(x - lastPt.x, y - lastPt.y) > 4) {
+                    rawPoints.push({ x, y });
+
+                    // Continuous self-intersection check
+                    if (checkSelfIntersection(rawPoints)) {
+                        triggerIntersectionReset();
+                        return;
+                    }
+                }
+
+                // Auto-close if returning to initial point
+                if (rawPoints.length > MIN_RAW_POINTS) {
+                    const distToStart = Math.hypot(x - rawPoints[0].x, y - rawPoints[0].y);
+                    if (distToStart < CLOSE_DISTANCE) {
+                        finishPolygon();
+                    }
+                }
+            }
+
+            // Hover detection over polygon vertices
+            if (hasClosed && polygon.length > 0) {
+                let closestIdx = -1;
+                let minDist = HOVER_DISTANCE;
+
+                for (let i = 0; i < polygon.length; i++) {
+                    const d = Math.hypot(polygon[i].x - mousePos.x, polygon[i].y - mousePos.y);
+                    if (d < minDist) {
+                        minDist = d;
+                        closestIdx = i;
+                    }
+                }
+
+                hoveredVertexIndex = closestIdx;
+
+                if (closestIdx !== -1) {
+                    tooltip.style.display = 'flex';
+                    tooltip.style.left = `${polygon[closestIdx].x}px`;
+                    tooltip.style.top = `${polygon[closestIdx].y}px`;
+                    
+                    const angleVal = polygonAngles[closestIdx];
+                    tooltipText.innerText = `Vertex ${closestIdx + 1}: ${angleVal}°`;
+                } else {
+                    tooltip.style.display = 'none';
+                }
+            }
+        }
+
+        window.addEventListener('mousemove', (e) => handleMove(e.clientX, e.clientY));
+
+        canvas.addEventListener('touchmove', (e) => {
+            if (e.touches.length > 0) {
+                handleMove(e.touches[0].clientX, e.touches[0].clientY);
+            }
+        }, { passive: true });
+
+        // Reset Drawing State
+        function resetDrawingState() {
+            isDrawing = false;
+            isSpaceDown = false;
+            drawingIndicator.classList.add('hidden');
+        }
+
+        // Complete Polygon Creation
+        function finishPolygon() {
+            resetDrawingState();
+            hasClosed = true;
+
+            // 1. Simplify raw drawn path with RDP algorithm
+            let simplified = ramerDouglasPeucker(rawPoints, RDP_TOLERANCE);
+
+            // Clean up start/end points if overlapping
+            if (simplified.length > 2) {
+                const first = simplified[0];
+                const last = simplified[simplified.length - 1];
+                if (Math.hypot(first.x - last.x, first.y - last.y) < 20) {
+                    simplified.pop();
+                }
+            }
+
+            // If polygon has fewer than 3 vertices, prompt user to redraw
+            if (simplified.length < 3) {
+                hasClosed = false;
+                rawPoints = [];
+                instruction.innerText = "Polygon must have at least 3 distinct corners. Try drawing a bigger shape!";
+                instruction.classList.add('text-amber-400');
+                return;
+            }
+
+            // Enforce Counter-Clockwise (CCW) vertex order (Standard orientation where CCW cross products > 0)
+            if (getSignedArea(simplified) > 0) {
+                simplified.reverse();
+            }
+
+            polygon = simplified;
+
+            // 2. Compute exact internal integer angles aligned strictly to (N-2)*180
+            calculateExactIntegerAngles();
+
+            // 3. UI Updates
+            instruction.style.display = 'none';
+            infoBox.classList.remove('hidden');
+            sideCountSpan.innerText = polygon.length;
+            vertCountSpan.innerText = polygon.length;
+            controls.classList.remove('hidden');
+            controls.style.display = 'flex';
+        }
+
+        // =========================================================================
+        // GEOMETRY ALGORITHMS
+        // =========================================================================
+
+        // Ramer-Douglas-Peucker Line Simplification
+        function pointToSegmentDistance(p, v, w) {
+            const l2 = (w.x - v.x) ** 2 + (w.y - v.y) ** 2;
+            if (l2 === 0) return Math.hypot(p.x - v.x, p.y - v.y);
+            let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+            t = Math.max(0, Math.min(1, t));
+            return Math.hypot(p.x - (v.x + t * (w.x - v.x)), p.y - (v.y + t * (w.y - v.y)));
+        }
+
+        function rdpRecursive(points, epsilon) {
+            if (points.length <= 2) return points;
+            let dmax = 0;
+            let index = 0;
+            const end = points.length - 1;
+
+            for (let i = 1; i < end; i++) {
+                const d = pointToSegmentDistance(points[i], points[0], points[end]);
+                if (d > dmax) {
+                    index = i;
+                    dmax = d;
+                }
+            }
+
+            if (dmax > epsilon) {
+                const rec1 = rdpRecursive(points.slice(0, index + 1), epsilon);
+                const rec2 = rdpRecursive(points.slice(index), epsilon);
+                return rec1.slice(0, rec1.length - 1).concat(rec2);
+            } else {
+                return [points[0], points[end]];
+            }
+        }
+
+        function ramerDouglasPeucker(pts, epsilon) {
+            if (pts.length <= 3) return pts;
+            const closedPts = [...pts, pts[0]];
+            const simplified = rdpRecursive(closedPts, epsilon);
+            simplified.pop();
+            return simplified;
+        }
+
+        // Signed Area for Orientation (CCW detection)
+        function getSignedArea(pts) {
+            let area = 0;
+            for (let i = 0; i < pts.length; i++) {
+                let j = (i + 1) % pts.length;
+                area += (pts[i].x * pts[j].y) - (pts[j].x * pts[i].y);
+            }
+            return area / 2;
+        }
+
+        // Calculate Exact Internal Angles and Distribute Integer Rounding Residuals
+        function calculateExactIntegerAngles() {
+            const n = polygon.length;
+            let anglesRad = [];
+            let sumRad = 0;
+
+            for (let i = 0; i < n; i++) {
+                const prev = polygon[(i - 1 + n) % n];
+                const curr = polygon[i];
+                const next = polygon[(i + 1) % n];
+
+                const a1 = Math.atan2(prev.y - curr.y, prev.x - curr.x);
+                const a2 = Math.atan2(next.y - curr.y, next.x - curr.x);
+
+                let angleDiff = a1 - a2;
+                if (angleDiff < 0) angleDiff += 2 * Math.PI;
+
+                anglesRad.push(angleDiff);
+                sumRad += angleDiff;
+            }
+
+            const expectedSumRad = (n - 2) * Math.PI;
+            const isExterior = Math.abs(sumRad - (n + 2) * Math.PI) < Math.abs(sumRad - expectedSumRad);
+
+            // True interior angles in degrees
+            rawAngles = anglesRad.map(rad => {
+                let interiorRad = isExterior ? (2 * Math.PI - rad) : rad;
+                return interiorRad * (180 / Math.PI);
+            });
+
+            // Round to initial integer degrees
+            polygonAngles = rawAngles.map(d => Math.round(d));
+
+            // Distribute rounding residual so sum ALWAYS equals target integer degree sum
+            const targetSum = (n - 2) * 180;
+            let currentSum = polygonAngles.reduce((a, b) => a + b, 0);
+            let diff = targetSum - currentSum;
+
+            if (diff !== 0) {
+                // Rank vertices by rounding residual error
+                let indices = Array.from({ length: n }, (_, i) => i);
+                indices.sort((a, b) => {
+                    const errA = rawAngles[a] - polygonAngles[a];
+                    const errB = rawAngles[b] - polygonAngles[b];
+                    return diff > 0 ? (errB - errA) : (errA - errB);
+                });
+
+                const step = diff > 0 ? 1 : -1;
+                let count = Math.abs(diff);
+                for (let k = 0; k < count; k++) {
+                    const targetIdx = indices[k % n];
+                    polygonAngles[targetIdx] += step;
+                }
+            }
+        }
+
+        // =========================================================================
+        // STRICT INTERIOR TRIANGULATION (EAR CLIPPING)
+        // =========================================================================
+
+        // Cross product of 2D vectors (B - A) and (C - A)
+        function crossProduct(a, b, c) {
+            return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        }
+
+        // Strict Point-in-Triangle test (using barycentric coordinates / cross products)
+        function isPointStrictlyInsideTriangle(p, a, b, c) {
+            const cp1 = crossProduct(a, b, p);
+            const cp2 = crossProduct(b, c, p);
+            const cp3 = crossProduct(c, a, p);
+
+            const hasNeg = (cp1 < -1e-5) || (cp2 < -1e-5) || (cp3 < -1e-5);
+            const hasPos = (cp1 > 1e-5) || (cp2 > 1e-5) || (cp3 > 1e-5);
+
+            return !(hasNeg && hasPos);
+        }
+
+        // Ray-casting Point-in-Polygon test against the original polygon
+        function isPointInPolygon(p, poly) {
+            let inside = false;
+            for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+                const xi = poly[i].x, yi = poly[i].y;
+                const xj = poly[j].x, yj = poly[j].y;
+
+                const intersect = ((yi > p.y) !== (yj > p.y)) &&
+                    (p.x < (xj - xi) * (p.y - yi) / (yj - yi + 1e-12) + xi);
+                if (intersect) inside = !inside;
+            }
+            return inside;
+        }
+
+        // Validates if vertex V_i is a valid ear strictly inside the polygon
+        function isValidEar(pts, i, fullPoly) {
+            const n = pts.length;
+            const prev = pts[(i - 1 + n) % n];
+            const curr = pts[i];
+            const next = pts[(i + 1) % n];
+
+            // a) Must form a convex corner relative to CCW winding interior (crossProduct > 0)
+            if (crossProduct(prev, curr, next) <= 1e-5) {
+                return false;
+            }
+
+            // b) No other remaining vertex in pts can lie strictly inside the triangle
+            for (let j = 0; j < n; j++) {
+                if (j === (i - 1 + n) % n || j === i || j === (i + 1) % n) continue;
+                if (isPointStrictlyInsideTriangle(pts[j], prev, curr, next)) {
+                    return false;
+                }
+            }
+
+            // c) The midpoint of diagonal (prev -> next) MUST lie strictly inside the interior polygon area
+            const midDiagonal = {
+                x: (prev.x + next.x) / 2,
+                y: (prev.y + next.y) / 2
+            };
+
+            if (!isPointInPolygon(midDiagonal, fullPoly)) {
+                return false;
+            }
+
+            return true;
+        }
+
+        // Robust Ear Clipping Algorithm
+        function earClipping(poly) {
+            if (poly.length < 3) return [];
+
+            let pts = poly.map((p, idx) => ({ x: p.x, y: p.y, id: idx }));
+            let resultTriangles = [];
+
+            let safetyCount = 0;
+            const maxCycles = pts.length * pts.length;
+
+            while (pts.length > 3 && safetyCount < maxCycles) {
+                safetyCount++;
+                let earFound = false;
+
+                for (let i = 0; i < pts.length; i++) {
+                    if (isValidEar(pts, i, poly)) {
+                        const prev = pts[(i - 1 + pts.length) % pts.length];
+                        const curr = pts[i];
+                        const next = pts[(i + 1) % pts.length];
+
+                        resultTriangles.push([
+                            { x: prev.x, y: prev.y },
+                            { x: curr.x, y: curr.y },
+                            { x: next.x, y: next.y }
+                        ]);
+
+                        pts.splice(i, 1);
+                        earFound = true;
+                        break;
+                    }
+                }
+
+                // Fallback protection if precision issue prevents ear detection
+                if (!earFound) {
+                    let bestIdx = 0;
+                    let maxCP = -Infinity;
+                    for (let i = 0; i < pts.length; i++) {
+                        const p = pts[(i - 1 + pts.length) % pts.length];
+                        const c = pts[i];
+                        const n = pts[(i + 1) % pts.length];
+                        const cp = crossProduct(p, c, n);
+                        if (cp > maxCP) {
+                            maxCP = cp;
+                            bestIdx = i;
+                        }
+                    }
+                    const prev = pts[(bestIdx - 1 + pts.length) % pts.length];
+                    const curr = pts[bestIdx];
+                    const next = pts[(bestIdx + 1) % pts.length];
+
+                    resultTriangles.push([
+                        { x: prev.x, y: prev.y },
+                        { x: curr.x, y: curr.y },
+                        { x: next.x, y: next.y }
+                    ]);
+                    pts.splice(bestIdx, 1);
+                }
+            }
+
+            if (pts.length === 3) {
+                resultTriangles.push([
+                    { x: pts[0].x, y: pts[0].y },
+                    { x: pts[1].x, y: pts[1].y },
+                    { x: pts[2].x, y: pts[2].y }
+                ]);
+            }
+
+            return resultTriangles;
+        }
+
+        function getCentroid(tri) {
+            return {
+                x: (tri[0].x + tri[1].x + tri[2].x) / 3,
+                y: (tri[0].y + tri[1].y + tri[2].y) / 3
+            };
+        }
+
+        // =========================================================================
+        // EVENT HANDLERS & BUTTONS
+        // =========================================================================
+
+        btnTriangulate.addEventListener('click', () => {
+            if (polygon.length >= 3) {
+                isTriangulated = !isTriangulated;
+                if (isTriangulated) {
+                    triangles = earClipping(polygon);
+                    btnTriangulateText.innerText = "Remove Triangles";
+                    btnTriangulate.classList.replace('bg-indigo-600', 'bg-amber-600');
+                    btnTriangulate.classList.replace('hover:bg-indigo-500', 'hover:bg-amber-500');
+                } else {
+                    triangles = [];
+                    btnTriangulateText.innerText = "Cut into Triangles";
+                    btnTriangulate.classList.replace('bg-amber-600', 'bg-indigo-600');
+                    btnTriangulate.classList.replace('hover:bg-amber-500', 'hover:bg-indigo-500');
+                }
+            }
+        });
+
+        btnSumAngles.addEventListener('click', () => {
+            if (polygon.length < 3) return;
+
+            const n = polygon.length;
+            const numTriangles = n - 2;
+            const theoreticalTotal = numTriangles * 180;
+
+            let terms = [];
+            for (let i = 0; i < n; i++) {
+                const val = polygonAngles[i];
+                terms.push(`
+                    <span class="inline-block px-1.5 py-0.5 my-0.5 rounded cursor-pointer transition hover:bg-indigo-900/60 hover:text-indigo-200"
+                          onmouseenter="highlightVertex(${i})" 
+                          onmouseleave="clearHighlight()">
+                        <span class="text-[10px] text-slate-500 font-sans">V${i+1}:</span>${val}&deg;
+                    </span>
+                `);
+            }
+
+            additionAlgo.innerHTML = terms.join(' <span class="text-slate-600">+</span> ');
+
+            formulaBreakdown.innerHTML = `
+                <span class="text-indigo-300">${numTriangles} triangles &times; 180&deg;</span> = 
+                <span class="text-teal-300 font-bold">${theoreticalTotal}&deg;</span>
+            `;
+
+            totalSumBadge.innerText = `Sum = ${theoreticalTotal}°`;
+
+            mathPanel.classList.remove('hidden');
+        });
+
+        btnCloseMath.addEventListener('click', () => {
+            mathPanel.classList.add('hidden');
+        });
+
+        window.highlightVertex = function(idx) {
+            activeHighlightIndex = idx;
+        };
+        window.clearHighlight = function() {
+            activeHighlightIndex = -1;
+        };
+
+        btnClear.addEventListener('click', () => {
+            rawPoints = [];
+            polygon = [];
+            polygonAngles = [];
+            rawAngles = [];
+            triangles = [];
+            isTriangulated = false;
+            hasClosed = false;
+            isDrawing = false;
+            hoveredVertexIndex = -1;
+            activeHighlightIndex = -1;
+
+            instruction.style.display = 'block';
+            instruction.innerText = "Hold SPACEBAR and drag your mouse to freehand draw a closed loop.";
+            instruction.classList.remove('text-amber-400');
+            
+            infoBox.classList.add('hidden');
+            controls.classList.add('hidden');
+            tooltip.style.display = 'none';
+            mathPanel.classList.add('hidden');
+
+            btnTriangulateText.innerText = "Cut into Triangles";
+            btnTriangulate.classList.replace('bg-amber-600', 'bg-indigo-600');
+            btnTriangulate.classList.replace('hover:bg-amber-500', 'hover:bg-indigo-500');
+        });
+
+        // =========================================================================
+        // RENDERING LOOP
+        // =========================================================================
+
+        function draw() {
+            ctx.clearRect(0, 0, width, height);
+
+            // 1. Draw Active Freehand Drawing Path
+            if (!hasClosed && rawPoints.length > 0) {
+                ctx.beginPath();
+                ctx.moveTo(rawPoints[0].x, rawPoints[0].y);
+                for (let i = 1; i < rawPoints.length; i++) {
+                    ctx.lineTo(rawPoints[i].x, rawPoints[i].y);
+                }
+                ctx.strokeStyle = '#38bdf8';
+                ctx.lineWidth = 3;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.stroke();
+
+                const startPt = rawPoints[0];
+                ctx.beginPath();
+                ctx.arc(startPt.x, startPt.y, CLOSE_DISTANCE, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(56, 189, 248, 0.12)';
+                ctx.fill();
+                ctx.strokeStyle = 'rgba(56, 189, 248, 0.5)';
+                ctx.setLineDash([4, 4]);
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+
+            // 2. Draw Triangulation overlay
+            if (hasClosed && isTriangulated && triangles.length > 0) {
+                ctx.beginPath();
+                ctx.moveTo(polygon[0].x, polygon[0].y);
+                for (let i = 1; i < polygon.length; i++) {
+                    ctx.lineTo(polygon[i].x, polygon[i].y);
+                }
+                ctx.closePath();
+                ctx.fillStyle = 'rgba(15, 23, 42, 0.6)';
+                ctx.fill();
+
+                triangles.forEach((tri, idx) => {
+                    ctx.beginPath();
+                    ctx.moveTo(tri[0].x, tri[0].y);
+                    ctx.lineTo(tri[1].x, tri[1].y);
+                    ctx.lineTo(tri[2].x, tri[2].y);
+                    ctx.closePath();
+
+                    const hue = (idx * 45) % 360;
+                    ctx.fillStyle = `hsla(${hue}, 70%, 65%, 0.12)`;
+                    ctx.fill();
+
+                    ctx.strokeStyle = 'rgba(129, 140, 248, 0.4)';
+                    ctx.lineWidth = 1.5;
+                    ctx.stroke();
+
+                    const center = getCentroid(tri);
+                    ctx.fillStyle = 'rgba(226, 232, 240, 0.45)';
+                    ctx.font = 'bold 20px Inter, sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText((idx + 1).toString(), center.x, center.y);
+                });
+            }
+
+            // 3. Draw Main Closed Polygon
+            if (hasClosed && polygon.length > 0) {
+                ctx.beginPath();
+                ctx.moveTo(polygon[0].x, polygon[0].y);
+                for (let i = 1; i < polygon.length; i++) {
+                    ctx.lineTo(polygon[i].x, polygon[i].y);
+                }
+                ctx.closePath();
+
+                if (!isTriangulated) {
+                    ctx.fillStyle = 'rgba(79, 70, 229, 0.15)';
+                    ctx.fill();
+                }
+
+                ctx.strokeStyle = '#6366f1';
+                ctx.lineWidth = 3.5;
+                ctx.lineJoin = 'round';
+                ctx.stroke();
+
+                polygon.forEach((pt, idx) => {
+                    const isHovered = (idx === hoveredVertexIndex);
+                    const isHighlighted = (idx === activeHighlightIndex);
+
+                    ctx.beginPath();
+                    const radius = (isHovered || isHighlighted) ? 8 : 5;
+                    ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
+
+                    if (isHovered || isHighlighted) {
+                        ctx.fillStyle = '#f43f5e';
+                    } else {
+                        ctx.fillStyle = '#ffffff';
+                    }
+                    ctx.fill();
+
+                    ctx.strokeStyle = (isHovered || isHighlighted) ? '#ffffff' : '#312e81';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+
+                    if (isHovered || isHighlighted) {
+                        ctx.beginPath();
+                        ctx.arc(pt.x, pt.y, 14, 0, Math.PI * 2);
+                        ctx.strokeStyle = 'rgba(244, 63, 94, 0.5)';
+                        ctx.lineWidth = 2;
+                        ctx.stroke();
+                    }
+                });
+            }
+
+            requestAnimationFrame(draw);
+        }
+
+        requestAnimationFrame(draw);
+
+    </script>
+</body>
+</html>
